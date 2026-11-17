@@ -100,9 +100,9 @@ object LightsBinder {
         }
     }
 
-    /** Master switch of the HyperOS ring light (Settings.Global). */
+    /** Master switch of the HyperOS ring light (Settings.Global): 0 = off, 2 = on. */
     fun setMaster(ctx: Context, on: Boolean): Boolean {
-        val v = if (on) 1 else 0
+        val v = if (on) 2 else 0
         try {
             if (Settings.Global.putInt(ctx.contentResolver, MASTER_KEY, v)) {
                 masterError = null
