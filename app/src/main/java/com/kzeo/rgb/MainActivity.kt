@@ -31,6 +31,14 @@ class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
 
     private lateinit var status: TextView
+    private lateinit var diag: TextView
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
+    private val poll = object : Runnable {
+        override fun run() {
+            updateDiag()
+            ui.postDelayed(this, 700)
+        }
+    }
     private lateinit var connectBtn: Button
     private lateinit var batteryBtn: Button
     private lateinit var ringSwitch: Switch
@@ -66,6 +74,26 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshStatus()
+        ui.post(poll)
+    }
+
+    override fun onPause() {
+        ui.removeCallbacks(poll)
+        super.onPause()
+    }
+
+    private fun updateDiag() {
+        val err = LightsBinder.lastError ?: LightsBinder.masterError
+        if (err != null) {
+            diag.text = "Error: $err"
+            diag.setTextColor(red)
+        } else if (LightsBinder.lastOkAt > 0) {
+            diag.text = "Last command sent OK"
+            diag.setTextColor(gray)
+        } else {
+            diag.text = "No command sent yet"
+            diag.setTextColor(gray)
+        }
     }
 
     override fun onDestroy() {
@@ -94,8 +122,11 @@ class MainActivity : Activity() {
         // Header
         root.addView(text("KZEO RGB", 30f, Color.WHITE, bold = true))
         status = text("", 14f, gray)
-        status.setPadding(0, dp(4), 0, dp(20))
+        status.setPadding(0, dp(4), 0, 0)
         root.addView(status)
+        diag = text("", 13f, gray)
+        diag.setPadding(0, dp(2), 0, dp(20))
+        root.addView(diag)
 
         connectBtn = button("Grant Shizuku permission") { requestShizuku() }
         connectBtn.visibility = View.GONE
@@ -266,9 +297,6 @@ class MainActivity : Activity() {
         val c = currentColor()
         Prefs.setColor(this, c)
         updatePreview(c)
-        if (Prefs.ringOn(this) && LightsBinder.hasPermission()) {
-            io.execute { LightsBinder.setColor(c, packageName) }
-        }
     }
 
     private fun needShizuku(): Boolean {
@@ -287,6 +315,10 @@ class MainActivity : Activity() {
         guard = false
     }
 
+    private fun startRing() {
+        startForegroundService(Intent(this, RingService::class.java))
+    }
+
     private fun onRingToggled(on: Boolean) {
         if (needShizuku()) {
             setSwitch(ringSwitch, false)
@@ -294,16 +326,14 @@ class MainActivity : Activity() {
         }
         Prefs.setRingOn(this, on)
         if (on) {
-            val c = currentColor()
-            io.execute {
-                LightsBinder.setMaster(this, true)
-                val ok = LightsBinder.setColor(c, packageName)
-                if (!ok) runOnUiThread { toast("Could not reach the light service") }
-            }
+            io.execute { LightsBinder.setMaster(this, true) }
+            startRing()
         } else {
-            stopAlways()
+            Prefs.setAlwaysOn(this, false)
+            setSwitch(alwaysSwitch, false)
+            stopService(Intent(this, RingService::class.java))
             io.execute {
-                Thread.sleep(250)
+                Thread.sleep(350)
                 LightsBinder.setColor(0, packageName)
                 LightsBinder.setMaster(this, false)
             }
@@ -321,21 +351,11 @@ class MainActivity : Activity() {
                 Prefs.setRingOn(this, true)
                 setSwitch(ringSwitch, true)
                 io.execute { LightsBinder.setMaster(this, true) }
+                startRing()
             }
-            startForegroundService(Intent(this, RingService::class.java))
         } else {
-            stopAlways()
-            if (Prefs.ringOn(this)) {
-                val c = currentColor()
-                io.execute { LightsBinder.setColor(c, packageName) }
-            }
+            Prefs.setAlwaysOn(this, false)
         }
-    }
-
-    private fun stopAlways() {
-        Prefs.setAlwaysOn(this, false)
-        setSwitch(alwaysSwitch, false)
-        stopService(Intent(this, RingService::class.java))
     }
 
     private fun requestShizuku() {

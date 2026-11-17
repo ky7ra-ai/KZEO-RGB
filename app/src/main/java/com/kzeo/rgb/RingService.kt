@@ -55,7 +55,7 @@ class RingService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle("KZEO RGB")
-            .setContentText("RGB always on is running")
+            .setContentText("RGB ring is on")
             .setOngoing(true)
             .build()
     }
@@ -63,6 +63,6 @@ class RingService : Service() {
     companion object {
         private const val CHANNEL = "kzeo_rgb_always_on"
         private const val NOTIF_ID = 1
-        private const val INTERVAL_MS = 3000L
+        private const val INTERVAL_MS = 200L
     }
 }

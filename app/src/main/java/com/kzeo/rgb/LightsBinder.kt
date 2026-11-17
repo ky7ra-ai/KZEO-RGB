@@ -26,6 +26,18 @@ object LightsBinder {
     @Volatile
     private var binder: IBinder? = null
 
+    /** Last error from sending a color, or null when the last send worked. */
+    @Volatile
+    var lastError: String? = null
+
+    /** Time of the last successful send (ms), 0 if none yet. */
+    @Volatile
+    var lastOkAt: Long = 0
+
+    /** Result of the last master-switch write. */
+    @Volatile
+    var masterError: String? = null
+
     fun shizukuRunning(): Boolean = try {
         Shizuku.pingBinder()
     } catch (t: Throwable) {
@@ -47,22 +59,40 @@ object LightsBinder {
         return wrapped
     }
 
+    private fun describe(t: Throwable): String {
+        val c = t.cause ?: t
+        return c.javaClass.simpleName + ": " + (c.message ?: "no message")
+    }
+
     /** Sends an ARGB color to the whole ring. Pass 0 to switch it off. */
     fun setColor(color: Int, pkg: String): Boolean {
-        val b = obtain() ?: return false
         val data = Parcel.obtain()
         val reply = Parcel.obtain()
         return try {
-            data.writeInterfaceToken(DESCRIPTOR)
-            data.writeInt(color)
-            data.writeString(pkg)
-            data.writeInt(3)
-            data.writeInt(0)
-            b.transact(TX_SET_COLOR, data, reply, 0)
-            reply.readException()
-            true
+            val b = obtain()
+            if (b == null) {
+                lastError = "Light service not found"
+                false
+            } else {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeInt(color)
+                data.writeString(pkg)
+                data.writeInt(3)
+                data.writeInt(0)
+                val handled = b.transact(TX_SET_COLOR, data, reply, 0)
+                reply.readException()
+                if (handled) {
+                    lastError = null
+                    lastOkAt = System.currentTimeMillis()
+                    true
+                } else {
+                    lastError = "Service did not handle the call"
+                    false
+                }
+            }
         } catch (t: Throwable) {
             binder = null
+            lastError = describe(t)
             false
         } finally {
             data.recycle()
@@ -74,11 +104,16 @@ object LightsBinder {
     fun setMaster(ctx: Context, on: Boolean): Boolean {
         val v = if (on) 1 else 0
         try {
-            if (Settings.Global.putInt(ctx.contentResolver, MASTER_KEY, v)) return true
+            if (Settings.Global.putInt(ctx.contentResolver, MASTER_KEY, v)) {
+                masterError = null
+                return true
+            }
         } catch (t: Throwable) {
             // WRITE_SECURE_SETTINGS not granted: fall back to a shell command via Shizuku.
         }
-        return shell("settings", "put", "global", MASTER_KEY, v.toString())
+        val ok = shell("settings", "put", "global", MASTER_KEY, v.toString())
+        masterError = if (ok) null else "Could not change the ring master switch"
+        return ok
     }
 
     /** Runs a command with shell privileges through Shizuku. */
