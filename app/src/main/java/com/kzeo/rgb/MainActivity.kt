@@ -2,8 +2,11 @@ package com.kzeo.rgb
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -14,10 +17,16 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.InputFilter
+import android.text.InputType
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -32,25 +41,54 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
-    // Palette: soft lavender glass
-    private val accent = Color.parseColor("#6A5CF5")
-    private val ink = Color.parseColor("#15162E")
-    private val mute = Color.parseColor("#6C7090")
-    private val lav = Color.parseColor("#E7E4FF")
-    private val trackOff = Color.parseColor("#CDD0E4")
-    private val bgTop = Color.parseColor("#ECEFFF")
-    private val bgBottom = Color.parseColor("#F9F6FF")
-    private val danger = Color.parseColor("#E5484D")
+    // ---------------------------------------------------------------- theme + language
+
+    /** True when the dark palette is active (user choice, or the system setting). */
+    private val dark: Boolean
+        get() = when (Prefs.theme(this)) {
+            1 -> false
+            2 -> true
+            else -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                    Configuration.UI_MODE_NIGHT_YES
+        }
+
+    private fun t(en: String, id: String): String = if (Prefs.lang(this) == "id") id else en
+
+    private val accent: Int get() = Color.parseColor(if (dark) "#8F82FF" else "#6A5CF5")
+    private val ink: Int get() = Color.parseColor(if (dark) "#F1F1FF" else "#15162E")
+    private val mute: Int get() = Color.parseColor(if (dark) "#9B9EC4" else "#6C7090")
+    private val lav: Int get() = Color.parseColor(if (dark) "#2B2858" else "#E7E4FF")
+    private val blue: Int get() = Color.parseColor("#2F7BFF")
+    private val blueBg: Int get() = Color.parseColor(if (dark) "#1C2C57" else "#DDEBFF")
+    private val orange: Int get() = Color.parseColor("#F26B3A")
+    private val orangeBg: Int get() = Color.parseColor(if (dark) "#4A2A20" else "#FFE6DC")
+    private val trackOff: Int get() = Color.parseColor(if (dark) "#3C3F63" else "#CDD0E4")
+    private val seekBg: Int get() = Color.parseColor(if (dark) "#3C3F63" else "#D8DAEC")
+    private val dotBorder: Int get() = Color.parseColor(if (dark) "#4A4D70" else "#D5D8EA")
+    private val segTrack: Int get() = Color.parseColor(if (dark) "#262846" else "#E9E8F8")
+    private val bgTop: Int get() = Color.parseColor(if (dark) "#0E0F22" else "#ECEFFF")
+    private val bgBottom: Int get() = Color.parseColor(if (dark) "#171433" else "#F9F6FF")
+    private val danger: Int get() = Color.parseColor("#E5484D")
+
+    // ---------------------------------------------------------------- state
 
     private val io = Executors.newSingleThreadExecutor()
     private val ui = Handler(Looper.getMainLooper())
     private val poll = object : Runnable {
         override fun run() {
-            updateDiag()
-            updateStats()
+            if (homeReady) {
+                updateDiag()
+                updateStats()
+            }
             ui.postDelayed(this, 700)
         }
     }
+
+    /** 0 = Home, 1 = Settings. */
+    private var tab = 0
+
+    /** True while the Home views below exist and are on screen. */
+    private var homeReady = false
 
     private lateinit var tileRing: TextView
     private lateinit var tileColor: TextView
@@ -82,21 +120,19 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = bgBottom
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or
-                View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        buildUi()
+        tab = savedInstanceState?.getInt("tab") ?: 0
+        render()
 
         Shizuku.addRequestPermissionResultListener(permListener)
         Shizuku.addBinderReceivedListenerSticky(binderListener)
         Shizuku.addBinderDeadListener(deadListener)
 
-        if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
-        }
+        if (Prefs.name(this).isNotBlank()) askNotifications()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("tab", tab)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onResume() {
@@ -117,6 +153,12 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    private fun askNotifications() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+        }
+    }
+
     // ---------------------------------------------------------------- UI helpers
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
@@ -133,8 +175,15 @@ class MainActivity : Activity() {
     private fun glass(radius: Int = 22): GradientDrawable {
         val d = GradientDrawable()
         d.cornerRadius = dp(radius).toFloat()
-        d.setColor(Color.parseColor("#B8FFFFFF"))
-        d.setStroke(dp(1), Color.parseColor("#E6FFFFFF"))
+        d.setColor(Color.parseColor(if (dark) "#26FFFFFF" else "#B8FFFFFF"))
+        d.setStroke(dp(1), Color.parseColor(if (dark) "#33FFFFFF" else "#E6FFFFFF"))
+        return d
+    }
+
+    private fun pill(color: Int, radius: Int): GradientDrawable {
+        val d = GradientDrawable()
+        d.cornerRadius = dp(radius).toFloat()
+        d.setColor(color)
         return d
     }
 
@@ -144,6 +193,9 @@ class MainActivity : Activity() {
         d.setColor(color)
         return d
     }
+
+    private fun background(): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(bgTop, bgBottom))
 
     private fun iconCircle(res: Int, tint: Int, bg: Int, size: Int): ImageView {
         val v = ImageView(this)
@@ -179,11 +231,21 @@ class MainActivity : Activity() {
 
     private fun greeting(): String {
         val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        return when {
-            h < 5 -> "Good Night"
-            h < 12 -> "Good Morning"
-            h < 18 -> "Good Afternoon"
-            else -> "Good Evening"
+        return if (Prefs.lang(this) == "id") {
+            when {
+                h < 5 -> "Selamat malam"
+                h < 11 -> "Selamat pagi"
+                h < 15 -> "Selamat siang"
+                h < 18 -> "Selamat sore"
+                else -> "Selamat malam"
+            }
+        } else {
+            when {
+                h < 5 -> "Good Night"
+                h < 12 -> "Good Morning"
+                h < 18 -> "Good Afternoon"
+                else -> "Good Evening"
+            }
         }
     }
 
@@ -224,6 +286,13 @@ class MainActivity : Activity() {
         return row
     }
 
+    private fun chevron(): ImageView {
+        val c = ImageView(this)
+        c.setImageResource(R.drawable.ic_chevron)
+        c.setColorFilter(mute)
+        return c
+    }
+
     private fun slider(parent: LinearLayout, label: String, value: Int, tint: Int, valueView: TextView): SeekBar {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
@@ -235,7 +304,7 @@ class MainActivity : Activity() {
         sb.progress = value
         sb.progressTintList = ColorStateList.valueOf(tint)
         sb.thumbTintList = ColorStateList.valueOf(tint)
-        sb.progressBackgroundTintList = ColorStateList.valueOf(Color.parseColor("#D8DAEC"))
+        sb.progressBackgroundTintList = ColorStateList.valueOf(seekBg)
         sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
                 if (fromUser) onColorChanged()
@@ -254,27 +323,202 @@ class MainActivity : Activity() {
         return sb
     }
 
-    // ---------------------------------------------------------------- UI
+    private fun segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit): LinearLayout {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.HORIZONTAL
+        box.background = pill(segTrack, 16)
+        box.setPadding(dp(4), dp(4), dp(4), dp(4))
+        for (i in options.indices) {
+            val on = i == selected
+            val label = tv(options[i], 13f, if (on) Color.WHITE else ink, on)
+            label.gravity = Gravity.CENTER
+            label.maxLines = 1
+            label.setPadding(dp(4), dp(10), dp(4), dp(10))
+            if (on) label.background = pill(accent, 12)
+            label.setOnClickListener { if (!on) onSelect(i) }
+            box.addView(label, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        return box
+    }
 
-    private fun buildUi() {
-        val c = Prefs.color(this)
+    private fun settingCard(icon: Int, title: String, sub: String, control: View): LinearLayout {
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.background = glass(22)
+        card.setPadding(dp(14), dp(14), dp(14), dp(14))
 
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        head.addView(iconCircle(icon, accent, lav, 40))
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.addView(tv(title, 15f, ink, true))
+        col.addView(tv(sub, 12f, mute))
+        val cp = lp(0, -2, weight = 1f)
+        cp.marginStart = dp(12)
+        head.addView(col, cp)
+        card.addView(head)
+        card.addView(control, lp(-1, -2, top = 14))
+        return card
+    }
+
+    // ---------------------------------------------------------------- screens
+
+    /** Draws whatever screen is current: onboarding, or the shell with Home / Settings. */
+    private fun render() {
+        homeReady = false
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = bgBottom
+        var flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        if (!dark) {
+            flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        }
+        window.decorView.systemUiVisibility = flags
+
+        if (Prefs.name(this).isBlank()) buildOnboarding() else buildShell()
+    }
+
+    private fun buildOnboarding() {
         val scroll = ScrollView(this)
         scroll.isFillViewport = true
         scroll.isVerticalScrollBarEnabled = false
-        scroll.background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(bgTop, bgBottom))
-        val root = LinearLayout(this)
-        root.orientation = LinearLayout.VERTICAL
-        root.setPadding(dp(20), dp(52), dp(20), dp(32))
-        scroll.addView(root, ViewGroup.LayoutParams(-1, -2))
-        setContentView(scroll)
+        scroll.background = background()
+
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.gravity = Gravity.CENTER
+        col.setPadding(dp(28), dp(24), dp(28), dp(24))
+        scroll.addView(col, ViewGroup.LayoutParams(-1, -2))
         scroll.setOnApplyWindowInsetsListener { _, ins ->
-            root.setPadding(
-                dp(20), ins.systemWindowInsetTop + dp(20),
-                dp(20), ins.systemWindowInsetBottom + dp(32)
-            )
+            col.setPadding(dp(28), ins.systemWindowInsetTop + dp(24), dp(28), ins.systemWindowInsetBottom + dp(24))
             ins
         }
+
+        val badge = ImageView(this)
+        badge.setImageResource(R.drawable.ic_power)
+        badge.setColorFilter(Color.WHITE)
+        badge.background = circle(accent)
+        badge.setPadding(dp(24), dp(24), dp(24), dp(24))
+        col.addView(badge, LinearLayout.LayoutParams(dp(88), dp(88)))
+
+        val title = tv(t("Welcome", "Selamat datang"), 30f, ink, true)
+        title.gravity = Gravity.CENTER
+        col.addView(title, lp(-2, -2, top = 28))
+        val sub = tv(t("What should we call you?", "Siapa nama kamu?"), 16f, mute)
+        sub.gravity = Gravity.CENTER
+        col.addView(sub, lp(-2, -2, top = 8, bottom = 28))
+
+        val et = EditText(this)
+        et.hint = t("Your name", "Nama kamu")
+        et.setHintTextColor(mute)
+        et.setTextColor(ink)
+        et.textSize = 18f
+        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        et.filters = arrayOf<InputFilter>(InputFilter.LengthFilter(20))
+        et.gravity = Gravity.CENTER
+        et.background = glass(22)
+        et.setPadding(dp(18), dp(16), dp(18), dp(16))
+        et.imeOptions = EditorInfo.IME_ACTION_DONE
+        col.addView(et, lp(-1, -2))
+
+        fun submit() {
+            val n = et.text.toString().trim()
+            if (n.isEmpty()) {
+                toast(t("Please enter your name", "Isi namamu dulu ya"))
+                return
+            }
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(et.windowToken, 0)
+            Prefs.setName(this, n)
+            tab = 0
+            render()
+            askNotifications()
+        }
+
+        et.setOnEditorActionListener { _, _, _ ->
+            submit()
+            true
+        }
+
+        val go = Button(this)
+        go.text = t("Continue", "Lanjut")
+        go.isAllCaps = false
+        go.textSize = 16f
+        go.setTextColor(Color.WHITE)
+        go.background = pill(accent, 22)
+        go.setOnClickListener { submit() }
+        col.addView(go, lp(-1, dp(54), top = 16))
+
+        setContentView(scroll)
+    }
+
+    private fun buildShell() {
+        val shell = LinearLayout(this)
+        shell.orientation = LinearLayout.VERTICAL
+        shell.background = background()
+
+        val scroll = ScrollView(this)
+        scroll.isVerticalScrollBarEnabled = false
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setPadding(dp(20), dp(16), dp(20), dp(16))
+        scroll.addView(root, ViewGroup.LayoutParams(-1, -2))
+        shell.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val nav = buildNav()
+        val np = lp(-1, -2, top = 4, bottom = 10)
+        np.marginStart = dp(16)
+        np.marginEnd = dp(16)
+        shell.addView(nav, np)
+
+        setContentView(shell)
+        shell.setOnApplyWindowInsetsListener { _, ins ->
+            shell.setPadding(0, ins.systemWindowInsetTop, 0, ins.systemWindowInsetBottom)
+            ins
+        }
+
+        if (tab == 0) buildHome(root) else buildSettings(root)
+    }
+
+    private fun buildNav(): View {
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER
+        bar.background = glass(30)
+        bar.setPadding(dp(8), dp(8), dp(8), dp(8))
+        bar.addView(navItem(R.drawable.ic_home, t("Home", "Beranda"), 0), lp(0, -2, end = 8, weight = 1f))
+        bar.addView(navItem(R.drawable.ic_settings, t("Settings", "Pengaturan"), 1), lp(0, -2, weight = 1f))
+        return bar
+    }
+
+    private fun navItem(icon: Int, label: String, index: Int): View {
+        val selected = tab == index
+        val item = LinearLayout(this)
+        item.orientation = LinearLayout.VERTICAL
+        item.gravity = Gravity.CENTER_HORIZONTAL
+        item.setPadding(0, dp(8), 0, dp(8))
+        if (selected) item.background = pill(lav, 22)
+
+        val img = ImageView(this)
+        img.setImageResource(icon)
+        img.setColorFilter(if (selected) accent else mute)
+        item.addView(img, LinearLayout.LayoutParams(dp(24), dp(24)))
+        item.addView(tv(label, 12f, if (selected) accent else mute, selected), lp(-2, -2, top = 2))
+
+        item.setOnClickListener {
+            if (tab != index) {
+                tab = index
+                render()
+            }
+        }
+        return item
+    }
+
+    // ---------------------------------------------------------------- Home
+
+    private fun buildHome(root: LinearLayout) {
+        val c = Prefs.color(this)
 
         // Header
         val header = LinearLayout(this)
@@ -283,14 +527,20 @@ class MainActivity : Activity() {
         val left = LinearLayout(this)
         left.orientation = LinearLayout.VERTICAL
         left.addView(tv(greeting(), 14f, mute))
-        left.addView(tv("KZEO RGB", 32f, ink, true), lp(-2, -2, top = 2))
-        left.addView(tv("Control your camera ring light.", 14f, mute), lp(-2, -2, top = 6))
-        header.addView(left, lp(0, -2, weight = 1f))
+        val hi = tv("Hi " + Prefs.name(this) + " 👋", 30f, ink, true)
+        hi.maxLines = 1
+        hi.ellipsize = TextUtils.TruncateAt.END
+        left.addView(hi, lp(-2, -2, top = 2))
+        left.addView(
+            tv(t("Control your camera ring light.", "Atur lampu ring kameramu."), 14f, mute),
+            lp(-2, -2, top = 6)
+        )
+        header.addView(left, lp(0, -2, end = 8, weight = 1f))
 
         val avatar = FrameLayout(this)
         avatarOuter = View(this)
         val inner = View(this)
-        inner.background = circle(Color.parseColor("#F4F2FF"))
+        inner.background = circle(Color.parseColor(if (dark) "#1A1838" else "#F4F2FF"))
         avatar.addView(avatarOuter, FrameLayout.LayoutParams(dp(84), dp(84)))
         avatar.addView(inner, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.CENTER))
         header.addView(avatar, LinearLayout.LayoutParams(dp(84), dp(84)))
@@ -303,8 +553,8 @@ class MainActivity : Activity() {
         val stats = LinearLayout(this)
         stats.orientation = LinearLayout.HORIZONTAL
         stats.addView(statTile(R.drawable.ic_power, accent, lav, tileRing, "Ring", 10))
-        stats.addView(statTile(R.drawable.ic_palette, Color.parseColor("#2F7BFF"), Color.parseColor("#DDEBFF"), tileColor, "Color", 10))
-        stats.addView(statTile(R.drawable.ic_bolt, Color.parseColor("#F26B3A"), Color.parseColor("#FFE6DC"), tileShizuku, "Shizuku", 0))
+        stats.addView(statTile(R.drawable.ic_palette, blue, blueBg, tileColor, t("Color", "Warna"), 10))
+        stats.addView(statTile(R.drawable.ic_bolt, orange, orangeBg, tileShizuku, "Shizuku", 0))
         root.addView(stats, lp(-1, -2, top = 24))
 
         // Hero card
@@ -316,11 +566,14 @@ class MainActivity : Activity() {
         heroText.orientation = LinearLayout.VERTICAL
         heroState = tv("", 13f, Color.WHITE)
         heroTitle = tv("", 28f, Color.WHITE, true)
-        heroSub = tv("Tap the button to turn the ring on or off.", 13f, Color.WHITE)
+        heroSub = tv(
+            t("Tap the button to turn the ring on or off.", "Ketuk tombol untuk menyalakan atau mematikan ring."),
+            13f, Color.WHITE
+        )
         heroText.addView(heroState)
         heroText.addView(heroTitle, lp(-2, -2, top = 8))
         heroText.addView(heroSub, lp(-2, -2, top = 4))
-        heroCard.addView(heroText, lp(0, -2, weight = 1f))
+        heroCard.addView(heroText, lp(0, -2, end = 12, weight = 1f))
         val power = ImageView(this)
         power.setImageResource(R.drawable.ic_power)
         power.setColorFilter(accent)
@@ -331,7 +584,7 @@ class MainActivity : Activity() {
         root.addView(heroCard, lp(-1, -2, top = 16))
 
         // Color
-        section(root, "Color")
+        section(root, t("Color", "Warna"))
         val colorCard = LinearLayout(this)
         colorCard.orientation = LinearLayout.VERTICAL
         colorCard.background = glass(22)
@@ -343,14 +596,15 @@ class MainActivity : Activity() {
         seekG = slider(colorCard, "G", Color.green(c), Color.parseColor("#22C55E"), valG)
         seekB = slider(colorCard, "B", Color.blue(c), Color.parseColor("#3B82F6"), valB)
 
+        presets.clear()
         val dots = LinearLayout(this)
         dots.orientation = LinearLayout.HORIZONTAL
         val hexes = listOf(
             "#E53935", "#FF7A00", "#FFD600", "#00E676",
             "#00E5FF", "#2979FF", "#B040FF", "#FFFFFF"
         )
-        for (hex in hexes) {
-            val col = Color.parseColor(hex)
+        for (h in hexes) {
+            val col = Color.parseColor(h)
             val wrap = FrameLayout(this)
             val dot = View(this)
             wrap.addView(dot, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
@@ -362,16 +616,13 @@ class MainActivity : Activity() {
         root.addView(colorCard)
 
         // Controls
-        section(root, "Controls")
+        section(root, t("Controls", "Kontrol"))
 
         connectBtn = Button(this)
-        connectBtn.text = "Grant Shizuku permission"
+        connectBtn.text = t("Grant Shizuku permission", "Beri izin Shizuku")
         connectBtn.isAllCaps = false
         connectBtn.setTextColor(Color.WHITE)
-        val cb = GradientDrawable()
-        cb.cornerRadius = dp(22).toFloat()
-        cb.setColor(accent)
-        connectBtn.background = cb
+        connectBtn.background = pill(accent, 22)
         connectBtn.setOnClickListener { requestShizuku() }
         connectBtn.visibility = View.GONE
         root.addView(connectBtn, lp(-1, dp(52), bottom = 10))
@@ -379,22 +630,29 @@ class MainActivity : Activity() {
         ringSwitch = newSwitch()
         ringSwitch.setOnCheckedChangeListener { _, checked -> if (!guard) onRingToggled(checked) }
         root.addView(
-            controlRow(R.drawable.ic_power, "RGB ring", tv("Turn the ring light on or off", 12f, mute), ringSwitch),
+            controlRow(
+                R.drawable.ic_power, "RGB ring",
+                tv(t("Turn the ring light on or off", "Nyalakan atau matikan lampu ring"), 12f, mute),
+                ringSwitch
+            ),
             lp(-1, -2, bottom = 10)
         )
 
         alwaysSwitch = newSwitch()
         alwaysSwitch.setOnCheckedChangeListener { _, checked -> if (!guard) onAlwaysToggled(checked) }
         root.addView(
-            controlRow(R.drawable.ic_sync, "RGB always on", tv("Restarts after reboot (Shizuku)", 12f, mute), alwaysSwitch),
+            controlRow(
+                R.drawable.ic_sync, t("RGB always on", "RGB selalu nyala"),
+                tv(t("Restarts after reboot (Shizuku)", "Nyala lagi setelah restart (Shizuku)"), 12f, mute),
+                alwaysSwitch
+            ),
             lp(-1, -2, bottom = 10)
         )
 
         batterySub = tv("", 12f, mute)
-        val chevron = ImageView(this)
-        chevron.setImageResource(R.drawable.ic_chevron)
-        chevron.setColorFilter(mute)
-        val batteryRow = controlRow(R.drawable.ic_battery, "Battery optimization", batterySub, chevron)
+        val batteryRow = controlRow(
+            R.drawable.ic_battery, t("Battery optimization", "Optimasi baterai"), batterySub, chevron()
+        )
         batteryRow.setOnClickListener { openBatterySettings() }
         root.addView(batteryRow, lp(-1, -2, bottom = 10))
 
@@ -407,9 +665,94 @@ class MainActivity : Activity() {
         ringSwitch.isChecked = Prefs.ringOn(this)
         alwaysSwitch.isChecked = Prefs.alwaysOn(this)
         guard = false
+        homeReady = true
         updatePreview(c)
         updateStats()
+        refreshStatus()
     }
+
+    // ---------------------------------------------------------------- Settings
+
+    private fun buildSettings(root: LinearLayout) {
+        root.addView(tv(t("Settings", "Pengaturan"), 30f, ink, true), lp(-2, -2, top = 8))
+        root.addView(
+            tv(t("Make the app yours.", "Sesuaikan aplikasimu."), 14f, mute),
+            lp(-2, -2, top = 6)
+        )
+
+        // Profile
+        section(root, t("Profile", "Profil"))
+        val nameRow = controlRow(
+            R.drawable.ic_person, t("Name", "Nama"), tv(Prefs.name(this), 12f, mute), chevron()
+        )
+        nameRow.setOnClickListener { editName() }
+        root.addView(nameRow)
+
+        // Language
+        section(root, t("Language", "Bahasa"))
+        val langIndex = if (Prefs.lang(this) == "id") 0 else 1
+        val langControl = segmented(listOf("Bahasa Indonesia", "English"), langIndex) { i ->
+            Prefs.setLang(this, if (i == 0) "id" else "en")
+            render()
+        }
+        root.addView(
+            settingCard(
+                R.drawable.ic_language, t("App language", "Bahasa aplikasi"),
+                t("Choose the language used in the app", "Pilih bahasa yang dipakai di aplikasi"),
+                langControl
+            )
+        )
+
+        // Theme
+        section(root, t("Theme", "Tema"))
+        val themeOrder = listOf(1, 2, 0)
+        val themeControl = segmented(
+            listOf(t("Light", "Terang"), t("Dark", "Gelap"), t("System", "Ikuti sistem")),
+            themeOrder.indexOf(Prefs.theme(this))
+        ) { i ->
+            Prefs.setTheme(this, themeOrder[i])
+            render()
+        }
+        root.addView(
+            settingCard(
+                R.drawable.ic_palette, t("App theme", "Tema aplikasi"),
+                t("Light, dark, or follow your phone", "Terang, gelap, atau ikuti HP"),
+                themeControl
+            )
+        )
+
+        val ver = tv("KZEO RGB · v1.0", 12f, mute)
+        ver.gravity = Gravity.CENTER
+        root.addView(ver, lp(-1, -2, top = 28))
+    }
+
+    private fun editName() {
+        val et = EditText(this)
+        et.setText(Prefs.name(this))
+        et.setSelection(et.text.length)
+        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        et.filters = arrayOf<InputFilter>(InputFilter.LengthFilter(20))
+        val box = FrameLayout(this)
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(et, FrameLayout.LayoutParams(-1, -2))
+
+        val style = if (dark) android.R.style.Theme_Material_Dialog_Alert
+        else android.R.style.Theme_Material_Light_Dialog_Alert
+        AlertDialog.Builder(this, style)
+            .setTitle(t("Your name", "Nama kamu"))
+            .setView(box)
+            .setPositiveButton(t("Save", "Simpan")) { _, _ ->
+                val n = et.text.toString().trim()
+                if (n.isNotEmpty()) {
+                    Prefs.setName(this, n)
+                    render()
+                }
+            }
+            .setNegativeButton(t("Cancel", "Batal"), null)
+            .show()
+    }
+
+    // ---------------------------------------------------------------- Home state
 
     private fun lum(color: Int): Float =
         (0.299f * Color.red(color) + 0.587f * Color.green(color) + 0.114f * Color.blue(color)) / 255f
@@ -428,7 +771,7 @@ class MainActivity : Activity() {
         val bg = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(color, shade(color, 0.62f)))
         bg.cornerRadius = dp(28).toFloat()
         heroCard.background = bg
-        val fg = if (lum(color) > 0.62f) ink else Color.WHITE
+        val fg = if (lum(color) > 0.62f) Color.parseColor("#15162E") else Color.WHITE
         heroTitle.text = hex(color)
         heroTitle.setTextColor(fg)
         heroSub.setTextColor(fg)
@@ -444,16 +787,18 @@ class MainActivity : Activity() {
             val d = circle(p.second)
             d.setStroke(
                 dp(if (p.second == color) 3 else 1),
-                if (p.second == color) accent else Color.parseColor("#D5D8EA")
+                if (p.second == color) accent else dotBorder
             )
             p.first.background = d
         }
     }
 
     private fun updateStats() {
+        if (!homeReady) return
         val on = Prefs.ringOn(this)
-        tileRing.text = if (on) "On" else "Off"
-        heroState.text = if (on) "● Ring is on" else "○ Ring is off"
+        tileRing.text = if (on) t("On", "Nyala") else t("Off", "Mati")
+        heroState.text = if (on) t("● Ring is on", "● Ring menyala")
+        else t("○ Ring is off", "○ Ring mati")
     }
 
     private fun updateDiag() {
@@ -462,7 +807,7 @@ class MainActivity : Activity() {
             diag.text = "Error: $err"
             diag.setTextColor(danger)
         } else if (LightsBinder.lastOkAt > 0) {
-            diag.text = "Last command sent OK"
+            diag.text = t("Last command sent OK", "Perintah terakhir berhasil dikirim")
             diag.setTextColor(mute)
         } else {
             diag.text = ""
@@ -489,8 +834,8 @@ class MainActivity : Activity() {
     private fun needShizuku(): Boolean {
         if (LightsBinder.hasPermission()) return false
         toast(
-            if (!LightsBinder.shizukuRunning()) "Start Shizuku first"
-            else "Grant Shizuku permission first"
+            if (!LightsBinder.shizukuRunning()) t("Start Shizuku first", "Jalankan Shizuku dulu")
+            else t("Grant Shizuku permission first", "Beri izin Shizuku dulu")
         )
         refreshStatus()
         return true
@@ -550,19 +895,19 @@ class MainActivity : Activity() {
     private fun requestShizuku() {
         try {
             if (Shizuku.shouldShowRequestPermissionRationale()) {
-                toast("Permission was denied. Allow it in the Shizuku app.")
+                toast(t("Permission was denied. Allow it in the Shizuku app.", "Izin ditolak. Izinkan lewat aplikasi Shizuku."))
             } else {
                 Shizuku.requestPermission(1)
             }
-        } catch (t: Throwable) {
-            toast("Shizuku is not available")
+        } catch (e: Throwable) {
+            toast(t("Shizuku is not available", "Shizuku tidak tersedia"))
         }
     }
 
     private fun openBatterySettings() {
         val pm = getSystemService(PowerManager::class.java)
         if (pm.isIgnoringBatteryOptimizations(packageName)) {
-            toast("Battery optimization is already disabled")
+            toast(t("Battery optimization is already disabled", "Optimasi baterai sudah nonaktif"))
             return
         }
         try {
@@ -570,28 +915,30 @@ class MainActivity : Activity() {
                 Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
                     .setData(Uri.parse("package:$packageName"))
             )
-        } catch (t: Throwable) {
+        } catch (e1: Throwable) {
             try {
                 startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-            } catch (t2: Throwable) {
-                toast("Could not open battery settings")
+            } catch (e2: Throwable) {
+                toast(t("Could not open battery settings", "Tidak bisa membuka pengaturan baterai"))
             }
         }
     }
 
     private fun refreshStatus() {
+        if (!homeReady) return
         val running = LightsBinder.shizukuRunning()
         val perm = LightsBinder.hasPermission()
         tileShizuku.text = when {
             !running -> "Offline"
-            !perm -> "No access"
-            else -> "Ready"
+            !perm -> t("No access", "Tanpa izin")
+            else -> t("Ready", "Siap")
         }
         connectBtn.visibility = if (running && !perm) View.VISIBLE else View.GONE
 
         val pm = getSystemService(PowerManager::class.java)
         batterySub.text = if (pm.isIgnoringBatteryOptimizations(packageName))
-            "Unrestricted" else "Tap to disable battery optimization"
+            t("Unrestricted", "Tanpa batasan")
+        else t("Tap to disable battery optimization", "Ketuk untuk menonaktifkan optimasi baterai")
         updateStats()
     }
 
