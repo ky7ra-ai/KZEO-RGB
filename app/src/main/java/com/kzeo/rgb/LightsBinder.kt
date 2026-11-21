@@ -50,6 +50,35 @@ object LightsBinder {
         false
     }
 
+    /** 0 = unknown (Shizuku not ready), 1 = light service found, 2 = not found. */
+    @Volatile
+    var serviceState = 0
+
+    /** Checks whether the HyperOS light service exists. Needs Shizuku, so call off the main thread. */
+    fun probe() {
+        serviceState = try {
+            if (!hasPermission()) 0
+            else if (SystemServiceHelper.getSystemService(DESCRIPTOR) != null) 1
+            else 2
+        } catch (t: Throwable) {
+            0
+        }
+    }
+
+    /** True when the ring master setting exists on this phone (readable without Shizuku). */
+    fun hasMasterKey(ctx: Context): Boolean = try {
+        Settings.Global.getInt(ctx.contentResolver, MASTER_KEY, -1) != -1
+    } catch (t: Throwable) {
+        false
+    }
+
+    /** Current value of the ring master setting (0 = off, 2 = on). */
+    fun masterValue(ctx: Context): Int = try {
+        Settings.Global.getInt(ctx.contentResolver, MASTER_KEY, 0)
+    } catch (t: Throwable) {
+        0
+    }
+
     private fun obtain(): IBinder? {
         val cached = binder
         if (cached != null && cached.isBinderAlive) return cached

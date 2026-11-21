@@ -16,6 +16,10 @@ object Prefs {
     fun alwaysOn(c: Context): Boolean = sp(c).getBoolean("always_on", false)
     fun setAlwaysOn(c: Context, v: Boolean) = sp(c).edit().putBoolean("always_on", v).apply()
 
+    /** Keep the ring lit while a camera app is open. On by default. */
+    fun cameraKeep(c: Context): Boolean = sp(c).getBoolean("camera_keep", true)
+    fun setCameraKeep(c: Context, v: Boolean) = sp(c).edit().putBoolean("camera_keep", v).apply()
+
     /** The name the user typed on first launch. Empty means onboarding is still needed. */
     fun name(c: Context): String = sp(c).getString("name", "") ?: ""
     fun setName(c: Context, v: String) = sp(c).edit().putString("name", v).apply()

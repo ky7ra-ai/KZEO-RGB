@@ -103,6 +103,11 @@ class MainActivity : Activity() {
     private lateinit var batterySub: TextView
     private lateinit var ringSwitch: Switch
     private lateinit var alwaysSwitch: Switch
+    private lateinit var cameraSwitch: Switch
+    private lateinit var devRing: TextView
+    private lateinit var devLight: TextView
+    private lateinit var devShizuku: TextView
+    private lateinit var devCamera: TextView
     private lateinit var seekR: SeekBar
     private lateinit var seekG: SeekBar
     private lateinit var seekB: SeekBar
@@ -649,6 +654,22 @@ class MainActivity : Activity() {
             lp(-1, -2, bottom = 10)
         )
 
+        cameraSwitch = newSwitch()
+        cameraSwitch.setOnCheckedChangeListener { _, checked ->
+            if (!guard) Prefs.setCameraKeep(this, checked)
+        }
+        root.addView(
+            controlRow(
+                R.drawable.ic_camera, t("Keep on in camera", "Tetap nyala di kamera"),
+                tv(
+                    t("Keeps the ring lit while the camera is open", "Ring tetap menyala saat kamera dibuka"),
+                    12f, mute
+                ),
+                cameraSwitch
+            ),
+            lp(-1, -2, bottom = 10)
+        )
+
         batterySub = tv("", 12f, mute)
         val batteryRow = controlRow(
             R.drawable.ic_battery, t("Battery optimization", "Optimasi baterai"), batterySub, chevron()
@@ -656,14 +677,40 @@ class MainActivity : Activity() {
         batteryRow.setOnClickListener { openBatterySettings() }
         root.addView(batteryRow, lp(-1, -2, bottom = 10))
 
+        // Device info
+        section(root, t("Device info", "Info perangkat"))
+        val devCard = LinearLayout(this)
+        devCard.orientation = LinearLayout.VERTICAL
+        devCard.background = glass(22)
+        devCard.setPadding(dp(16), dp(4), dp(16), dp(4))
+        devRing = TextView(this)
+        devLight = TextView(this)
+        devShizuku = TextView(this)
+        devCamera = TextView(this)
+        val devName = TextView(this)
+        devName.text = deviceName()
+        val devModel = TextView(this)
+        devModel.text = Build.MANUFACTURER.replaceFirstChar { ch -> ch.uppercase() } + " " + Build.MODEL
+        val devAndroid = TextView(this)
+        devAndroid.text = Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
+        infoRow(devCard, t("Device name", "Nama perangkat"), devName, true)
+        infoRow(devCard, "Model", devModel, false)
+        infoRow(devCard, "RGB ring", devRing, false)
+        infoRow(devCard, t("HyperOS light", "Lampu HyperOS"), devLight, false)
+        infoRow(devCard, "Shizuku", devShizuku, false)
+        infoRow(devCard, t("Android version", "Versi Android"), devAndroid, false)
+        infoRow(devCard, t("Camera", "Kamera"), devCamera, false)
+        root.addView(devCard)
+
         diag = tv("", 12f, mute)
         diag.gravity = Gravity.CENTER
-        root.addView(diag, lp(-1, -2, top = 6))
+        root.addView(diag, lp(-1, -2, top = 14))
 
         // Initial state
         guard = true
         ringSwitch.isChecked = Prefs.ringOn(this)
         alwaysSwitch.isChecked = Prefs.alwaysOn(this)
+        cameraSwitch.isChecked = Prefs.cameraKeep(this)
         guard = false
         homeReady = true
         updatePreview(c)
@@ -799,6 +846,81 @@ class MainActivity : Activity() {
         tileRing.text = if (on) t("On", "Nyala") else t("Off", "Mati")
         heroState.text = if (on) t("● Ring is on", "● Ring menyala")
         else t("○ Ring is off", "○ Ring mati")
+        updateDevice()
+    }
+
+    // ---------------------------------------------------------------- Device info
+
+    private fun deviceName(): String {
+        val n = try {
+            Settings.Global.getString(contentResolver, "device_name")
+        } catch (e: Throwable) {
+            null
+        }
+        return if (!n.isNullOrBlank()) n else Build.MODEL
+    }
+
+    private fun infoRow(card: LinearLayout, label: String, value: TextView, first: Boolean) {
+        if (!first) {
+            val line = View(this)
+            line.setBackgroundColor(dotBorder)
+            card.addView(line, LinearLayout.LayoutParams(-1, dp(1)))
+        }
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(0, dp(12), 0, dp(12))
+        row.addView(tv(label, 14f, mute), lp(0, -2, end = 12, weight = 1f))
+        value.textSize = 14f
+        value.setTextColor(ink)
+        value.setTypeface(value.typeface, Typeface.BOLD)
+        value.gravity = Gravity.END
+        row.addView(value, LinearLayout.LayoutParams(-2, -2))
+        card.addView(row)
+    }
+
+    /** kind: 0 = neutral, 1 = good, 2 = bad. */
+    private fun status(view: TextView, text: String, kind: Int) {
+        view.text = text
+        view.setTextColor(
+            when (kind) {
+                1 -> Color.parseColor("#1FA971")
+                2 -> danger
+                else -> ink
+            }
+        )
+    }
+
+    private fun shizukuVersion(): String = try {
+        " (v" + Shizuku.getVersion() + ")"
+    } catch (e: Throwable) {
+        ""
+    }
+
+    private fun updateDevice() {
+        val svc = LightsBinder.serviceState
+        when {
+            svc == 1 || LightsBinder.hasMasterKey(this) -> status(devRing, t("Supported", "Didukung"), 1)
+            svc == 2 -> status(devRing, t("Not supported", "Tidak didukung"), 2)
+            else -> status(devRing, t("Unknown", "Belum diketahui"), 0)
+        }
+        when (svc) {
+            1 -> status(devLight, t("Available", "Tersedia"), 1)
+            2 -> status(devLight, t("Unavailable", "Tidak tersedia"), 2)
+            else -> status(devLight, t("Needs Shizuku", "Perlu Shizuku"), 0)
+        }
+        val running = LightsBinder.shizukuRunning()
+        when {
+            LightsBinder.hasPermission() ->
+                status(devShizuku, t("Connected", "Terhubung") + shizukuVersion(), 1)
+            running -> status(devShizuku, t("Permission needed", "Perlu izin"), 2)
+            else -> status(devShizuku, t("Not running", "Tidak berjalan"), 2)
+        }
+        when {
+            !RingService.running -> status(devCamera, "—", 0)
+            RingService.cameraInUse -> status(devCamera, t("In use", "Sedang dipakai"), 1)
+            else -> status(devCamera, t("Idle", "Siaga"), 0)
+        }
     }
 
     private fun updateDiag() {
@@ -934,6 +1056,8 @@ class MainActivity : Activity() {
             else -> t("Ready", "Siap")
         }
         connectBtn.visibility = if (running && !perm) View.VISIBLE else View.GONE
+
+        if (perm) io.execute { LightsBinder.probe() } else LightsBinder.serviceState = 0
 
         val pm = getSystemService(PowerManager::class.java)
         batterySub.text = if (pm.isIgnoringBatteryOptimizations(packageName))
