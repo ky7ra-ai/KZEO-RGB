@@ -72,13 +72,6 @@ object LightsBinder {
         false
     }
 
-    /** Current value of the ring master setting (0 = off, 2 = on). */
-    fun masterValue(ctx: Context): Int = try {
-        Settings.Global.getInt(ctx.contentResolver, MASTER_KEY, 0)
-    } catch (t: Throwable) {
-        0
-    }
-
     private fun obtain(): IBinder? {
         val cached = binder
         if (cached != null && cached.isBinderAlive) return cached

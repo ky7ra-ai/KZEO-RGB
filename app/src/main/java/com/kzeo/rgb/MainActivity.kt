@@ -76,10 +76,8 @@ class MainActivity : Activity() {
     private val ui = Handler(Looper.getMainLooper())
     private val poll = object : Runnable {
         override fun run() {
-            if (homeReady) {
-                updateDiag()
-                updateStats()
-            }
+            if (homeReady) updateStats()
+            if (deviceReady) updateDevice()
             ui.postDelayed(this, 700)
         }
     }
@@ -90,6 +88,9 @@ class MainActivity : Activity() {
     /** True while the Home views below exist and are on screen. */
     private var homeReady = false
 
+    /** True while the Device info views exist and are on screen. */
+    private var deviceReady = false
+
     private lateinit var tileRing: TextView
     private lateinit var tileColor: TextView
     private lateinit var tileShizuku: TextView
@@ -98,16 +99,13 @@ class MainActivity : Activity() {
     private lateinit var heroTitle: TextView
     private lateinit var heroSub: TextView
     private lateinit var avatarOuter: View
-    private lateinit var diag: TextView
     private lateinit var connectBtn: Button
     private lateinit var batterySub: TextView
     private lateinit var ringSwitch: Switch
     private lateinit var alwaysSwitch: Switch
-    private lateinit var cameraSwitch: Switch
     private lateinit var devRing: TextView
     private lateinit var devLight: TextView
     private lateinit var devShizuku: TextView
-    private lateinit var devCamera: TextView
     private lateinit var seekR: SeekBar
     private lateinit var seekG: SeekBar
     private lateinit var seekB: SeekBar
@@ -373,6 +371,7 @@ class MainActivity : Activity() {
     /** Draws whatever screen is current: onboarding, or the shell with Home / Settings. */
     private fun render() {
         homeReady = false
+        deviceReady = false
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = bgBottom
         var flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
@@ -483,7 +482,11 @@ class MainActivity : Activity() {
             ins
         }
 
-        if (tab == 0) buildHome(root) else buildSettings(root)
+        when (tab) {
+            0 -> buildHome(root)
+            1 -> buildDevice(root)
+            else -> buildSettings(root)
+        }
     }
 
     private fun buildNav(): View {
@@ -492,8 +495,9 @@ class MainActivity : Activity() {
         bar.gravity = Gravity.CENTER
         bar.background = glass(30)
         bar.setPadding(dp(8), dp(8), dp(8), dp(8))
-        bar.addView(navItem(R.drawable.ic_home, t("Home", "Beranda"), 0), lp(0, -2, end = 8, weight = 1f))
-        bar.addView(navItem(R.drawable.ic_settings, t("Settings", "Pengaturan"), 1), lp(0, -2, weight = 1f))
+        bar.addView(navItem(R.drawable.ic_home, t("Home", "Beranda"), 0), lp(0, -2, end = 6, weight = 1f))
+        bar.addView(navItem(R.drawable.ic_info, t("Device", "Perangkat"), 1), lp(0, -2, end = 6, weight = 1f))
+        bar.addView(navItem(R.drawable.ic_settings, t("Settings", "Pengaturan"), 2), lp(0, -2, weight = 1f))
         return bar
     }
 
@@ -654,22 +658,6 @@ class MainActivity : Activity() {
             lp(-1, -2, bottom = 10)
         )
 
-        cameraSwitch = newSwitch()
-        cameraSwitch.setOnCheckedChangeListener { _, checked ->
-            if (!guard) Prefs.setCameraKeep(this, checked)
-        }
-        root.addView(
-            controlRow(
-                R.drawable.ic_camera, t("Keep on in camera", "Tetap nyala di kamera"),
-                tv(
-                    t("Keeps the ring lit while the camera is open", "Ring tetap menyala saat kamera dibuka"),
-                    12f, mute
-                ),
-                cameraSwitch
-            ),
-            lp(-1, -2, bottom = 10)
-        )
-
         batterySub = tv("", 12f, mute)
         val batteryRow = controlRow(
             R.drawable.ic_battery, t("Battery optimization", "Optimasi baterai"), batterySub, chevron()
@@ -677,8 +665,26 @@ class MainActivity : Activity() {
         batteryRow.setOnClickListener { openBatterySettings() }
         root.addView(batteryRow, lp(-1, -2, bottom = 10))
 
-        // Device info
-        section(root, t("Device info", "Info perangkat"))
+        // Initial state
+        guard = true
+        ringSwitch.isChecked = Prefs.ringOn(this)
+        alwaysSwitch.isChecked = Prefs.alwaysOn(this)
+        guard = false
+        homeReady = true
+        updatePreview(c)
+        updateStats()
+        refreshStatus()
+    }
+
+    // ---------------------------------------------------------------- Device info
+
+    private fun buildDevice(root: LinearLayout) {
+        root.addView(tv(t("Device info", "Info perangkat"), 30f, ink, true), lp(-2, -2, top = 8))
+        root.addView(
+            tv(t("What this phone supports.", "Apa saja yang didukung HP ini."), 14f, mute),
+            lp(-2, -2, top = 6, bottom = 20)
+        )
+
         val devCard = LinearLayout(this)
         devCard.orientation = LinearLayout.VERTICAL
         devCard.background = glass(22)
@@ -686,7 +692,6 @@ class MainActivity : Activity() {
         devRing = TextView(this)
         devLight = TextView(this)
         devShizuku = TextView(this)
-        devCamera = TextView(this)
         val devName = TextView(this)
         devName.text = deviceName()
         val devModel = TextView(this)
@@ -699,22 +704,9 @@ class MainActivity : Activity() {
         infoRow(devCard, t("HyperOS light", "Lampu HyperOS"), devLight, false)
         infoRow(devCard, "Shizuku", devShizuku, false)
         infoRow(devCard, t("Android version", "Versi Android"), devAndroid, false)
-        infoRow(devCard, t("Camera", "Kamera"), devCamera, false)
         root.addView(devCard)
 
-        diag = tv("", 12f, mute)
-        diag.gravity = Gravity.CENTER
-        root.addView(diag, lp(-1, -2, top = 14))
-
-        // Initial state
-        guard = true
-        ringSwitch.isChecked = Prefs.ringOn(this)
-        alwaysSwitch.isChecked = Prefs.alwaysOn(this)
-        cameraSwitch.isChecked = Prefs.cameraKeep(this)
-        guard = false
-        homeReady = true
-        updatePreview(c)
-        updateStats()
+        deviceReady = true
         refreshStatus()
     }
 
@@ -768,9 +760,15 @@ class MainActivity : Activity() {
             )
         )
 
-        val ver = tv("KZEO RGB · v1.0", 12f, mute)
+        val ver = tv(versionName(), 12f, mute)
         ver.gravity = Gravity.CENTER
         root.addView(ver, lp(-1, -2, top = 28))
+    }
+
+    private fun versionName(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0"
+    } catch (e: Throwable) {
+        "1.0"
     }
 
     private fun editName() {
@@ -846,7 +844,6 @@ class MainActivity : Activity() {
         tileRing.text = if (on) t("On", "Nyala") else t("Off", "Mati")
         heroState.text = if (on) t("● Ring is on", "● Ring menyala")
         else t("○ Ring is off", "○ Ring mati")
-        updateDevice()
     }
 
     // ---------------------------------------------------------------- Device info
@@ -915,24 +912,6 @@ class MainActivity : Activity() {
                 status(devShizuku, t("Connected", "Terhubung") + shizukuVersion(), 1)
             running -> status(devShizuku, t("Permission needed", "Perlu izin"), 2)
             else -> status(devShizuku, t("Not running", "Tidak berjalan"), 2)
-        }
-        when {
-            !RingService.running -> status(devCamera, "—", 0)
-            RingService.cameraInUse -> status(devCamera, t("In use", "Sedang dipakai"), 1)
-            else -> status(devCamera, t("Idle", "Siaga"), 0)
-        }
-    }
-
-    private fun updateDiag() {
-        val err = LightsBinder.lastError ?: LightsBinder.masterError
-        if (err != null) {
-            diag.text = "Error: $err"
-            diag.setTextColor(danger)
-        } else if (LightsBinder.lastOkAt > 0) {
-            diag.text = t("Last command sent OK", "Perintah terakhir berhasil dikirim")
-            diag.setTextColor(mute)
-        } else {
-            diag.text = ""
         }
     }
 
@@ -1047,17 +1026,17 @@ class MainActivity : Activity() {
     }
 
     private fun refreshStatus() {
-        if (!homeReady) return
         val running = LightsBinder.shizukuRunning()
         val perm = LightsBinder.hasPermission()
+        if (perm) io.execute { LightsBinder.probe() } else LightsBinder.serviceState = 0
+        if (deviceReady) updateDevice()
+        if (!homeReady) return
         tileShizuku.text = when {
             !running -> "Offline"
             !perm -> t("No access", "Tanpa izin")
             else -> t("Ready", "Siap")
         }
         connectBtn.visibility = if (running && !perm) View.VISIBLE else View.GONE
-
-        if (perm) io.execute { LightsBinder.probe() } else LightsBinder.serviceState = 0
 
         val pm = getSystemService(PowerManager::class.java)
         batterySub.text = if (pm.isIgnoringBatteryOptimizations(packageName))
