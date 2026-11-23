@@ -1,6 +1,10 @@
 package com.kzeo.rgb
 
 import android.Manifest
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ArgbEvaluator
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
@@ -23,6 +27,8 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
@@ -54,24 +60,27 @@ class MainActivity : Activity() {
 
     private fun t(en: String, id: String): String = if (Prefs.lang(this) == "id") id else en
 
-    private val accent: Int get() = Color.parseColor(if (dark) "#8F82FF" else "#6A5CF5")
-    private val ink: Int get() = Color.parseColor(if (dark) "#F1F1FF" else "#15162E")
-    private val mute: Int get() = Color.parseColor(if (dark) "#9B9EC4" else "#6C7090")
-    private val lav: Int get() = Color.parseColor(if (dark) "#2B2858" else "#E7E4FF")
-    private val blue: Int get() = Color.parseColor("#2F7BFF")
-    private val blueBg: Int get() = Color.parseColor(if (dark) "#1C2C57" else "#DDEBFF")
-    private val orange: Int get() = Color.parseColor("#F26B3A")
-    private val orangeBg: Int get() = Color.parseColor(if (dark) "#4A2A20" else "#FFE6DC")
-    private val trackOff: Int get() = Color.parseColor(if (dark) "#3C3F63" else "#CDD0E4")
-    private val seekBg: Int get() = Color.parseColor(if (dark) "#3C3F63" else "#D8DAEC")
-    private val dotBorder: Int get() = Color.parseColor(if (dark) "#4A4D70" else "#D5D8EA")
-    private val segTrack: Int get() = Color.parseColor(if (dark) "#262846" else "#E9E8F8")
-    private val bgTop: Int get() = Color.parseColor(if (dark) "#0E0F22" else "#ECEFFF")
-    private val bgBottom: Int get() = Color.parseColor(if (dark) "#171433" else "#F9F6FF")
+    private val accent: Int get() = Color.parseColor(if (dark) "#FF3B3B" else "#D71921")
+    private val ink: Int get() = Color.parseColor(if (dark) "#FFFFFF" else "#0B0B0B")
+    private val mute: Int get() = Color.parseColor(if (dark) "#9A9A9A" else "#707070")
+    private val lav: Int get() = Color.parseColor(if (dark) "#3A1517" else "#FFE5E6")
+    private val blue: Int get() = Color.parseColor(if (dark) "#FFFFFF" else "#0B0B0B")
+    private val blueBg: Int get() = Color.parseColor(if (dark) "#262626" else "#EBEBEB")
+    private val orange: Int get() = Color.parseColor(if (dark) "#FF3B3B" else "#D71921")
+    private val orangeBg: Int get() = Color.parseColor(if (dark) "#3A1517" else "#FFE5E6")
+    private val trackOff: Int get() = Color.parseColor(if (dark) "#3A3A3A" else "#CFCFCF")
+    private val seekBg: Int get() = Color.parseColor(if (dark) "#3A3A3A" else "#DADADA")
+    private val dotBorder: Int get() = Color.parseColor(if (dark) "#444444" else "#D9D9D9")
+    private val segTrack: Int get() = Color.parseColor(if (dark) "#1E1E1E" else "#EBEBEB")
+    private val bgTop: Int get() = Color.parseColor(if (dark) "#000000" else "#FFFFFF")
+    private val bgBottom: Int get() = Color.parseColor(if (dark) "#000000" else "#FFFFFF")
+    private val navBar: Int get() = Color.parseColor(if (dark) "#161616" else "#FFFFFF")
+    private val navStroke: Int get() = Color.parseColor(if (dark) "#2A2A2A" else "#E8E8E8")
     private val danger: Int get() = Color.parseColor("#E5484D")
 
     // ---------------------------------------------------------------- state
 
+    private val NAV_SELECTED_WEIGHT = 2.2f
     private val io = Executors.newSingleThreadExecutor()
     private val ui = Handler(Looper.getMainLooper())
     private val poll = object : Runnable {
@@ -116,6 +125,18 @@ class MainActivity : Activity() {
 
     private var guard = false
 
+    private class NavItem(
+        val box: LinearLayout,
+        val bg: GradientDrawable,
+        val icon: ImageView,
+        val label: TextView
+    )
+
+    private val navItems = ArrayList<NavItem>()
+    private var navAnim: ValueAnimator? = null
+    private lateinit var contentRoot: LinearLayout
+    private lateinit var contentScroll: ScrollView
+
     private val permListener =
         Shizuku.OnRequestPermissionResultListener { _, _ -> runOnUiThread { refreshStatus() } }
     private val binderListener = Shizuku.OnBinderReceivedListener { runOnUiThread { refreshStatus() } }
@@ -124,7 +145,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tab = savedInstanceState?.getInt("tab") ?: 0
-        render()
+        if (savedInstanceState == null) showSplash() else render()
 
         Shizuku.addRequestPermissionResultListener(permListener)
         Shizuku.addBinderReceivedListenerSticky(binderListener)
@@ -150,6 +171,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        ui.removeCallbacksAndMessages(null)
+        navAnim?.cancel()
         Shizuku.removeRequestPermissionResultListener(permListener)
         Shizuku.removeBinderReceivedListener(binderListener)
         Shizuku.removeBinderDeadListener(deadListener)
@@ -178,8 +201,8 @@ class MainActivity : Activity() {
     private fun glass(radius: Int = 22): GradientDrawable {
         val d = GradientDrawable()
         d.cornerRadius = dp(radius).toFloat()
-        d.setColor(Color.parseColor(if (dark) "#26FFFFFF" else "#B8FFFFFF"))
-        d.setStroke(dp(1), Color.parseColor(if (dark) "#33FFFFFF" else "#E6FFFFFF"))
+        d.setColor(Color.parseColor(if (dark) "#161616" else "#F4F4F4"))
+        d.setStroke(dp(1), Color.parseColor(if (dark) "#262626" else "#E8E8E8"))
         return d
     }
 
@@ -333,11 +356,11 @@ class MainActivity : Activity() {
         box.setPadding(dp(4), dp(4), dp(4), dp(4))
         for (i in options.indices) {
             val on = i == selected
-            val label = tv(options[i], 13f, if (on) Color.WHITE else ink, on)
+            val label = tv(options[i], 13f, if (on) bgBottom else ink, on)
             label.gravity = Gravity.CENTER
             label.maxLines = 1
             label.setPadding(dp(4), dp(10), dp(4), dp(10))
-            if (on) label.background = pill(accent, 12)
+            if (on) label.background = pill(ink, 12)
             label.setOnClickListener { if (!on) onSelect(i) }
             box.addView(label, LinearLayout.LayoutParams(0, -2, 1f))
         }
@@ -400,10 +423,9 @@ class MainActivity : Activity() {
         }
 
         val badge = ImageView(this)
-        badge.setImageResource(R.drawable.ic_power)
-        badge.setColorFilter(Color.WHITE)
+        badge.setImageResource(R.drawable.ic_logo_mono)
         badge.background = circle(accent)
-        badge.setPadding(dp(24), dp(24), dp(24), dp(24))
+        badge.setPadding(dp(6), dp(6), dp(6), dp(6))
         col.addView(badge, LinearLayout.LayoutParams(dp(88), dp(88)))
 
         val title = tv(t("Welcome", "Selamat datang"), 30f, ink, true)
@@ -469,6 +491,8 @@ class MainActivity : Activity() {
         root.setPadding(dp(20), dp(16), dp(20), dp(16))
         scroll.addView(root, ViewGroup.LayoutParams(-1, -2))
         shell.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        contentScroll = scroll
+        contentRoot = root
 
         val nav = buildNav()
         val np = lp(-1, -2, top = 4, bottom = 10)
@@ -482,46 +506,168 @@ class MainActivity : Activity() {
             ins
         }
 
+        fillContent()
+    }
+
+    /** Builds the current tab's content into the scroll area. */
+    private fun fillContent() {
+        homeReady = false
+        deviceReady = false
+        contentRoot.removeAllViews()
         when (tab) {
-            0 -> buildHome(root)
-            1 -> buildDevice(root)
-            else -> buildSettings(root)
+            0 -> buildHome(contentRoot)
+            1 -> buildDevice(contentRoot)
+            else -> buildSettings(contentRoot)
         }
     }
 
     private fun buildNav(): View {
+        navItems.clear()
         val bar = LinearLayout(this)
         bar.orientation = LinearLayout.HORIZONTAL
         bar.gravity = Gravity.CENTER
-        bar.background = glass(30)
-        bar.setPadding(dp(8), dp(8), dp(8), dp(8))
-        bar.addView(navItem(R.drawable.ic_home, t("Home", "Beranda"), 0), lp(0, -2, end = 6, weight = 1f))
-        bar.addView(navItem(R.drawable.ic_info, t("Device", "Perangkat"), 1), lp(0, -2, end = 6, weight = 1f))
-        bar.addView(navItem(R.drawable.ic_settings, t("Settings", "Pengaturan"), 2), lp(0, -2, weight = 1f))
+        val bg = GradientDrawable()
+        bg.cornerRadius = dp(30).toFloat()
+        bg.setColor(navBar)
+        bg.setStroke(dp(1), navStroke)
+        bar.background = bg
+        bar.elevation = dp(10).toFloat()
+        bar.setPadding(dp(10), dp(10), dp(10), dp(10))
+        addNavItem(bar, R.drawable.ic_home, t("Home", "Beranda"), 0)
+        addNavItem(bar, R.drawable.ic_info, t("Device", "Perangkat"), 1)
+        addNavItem(bar, R.drawable.ic_settings, t("Settings", "Pengaturan"), 2)
         return bar
     }
 
-    private fun navItem(icon: Int, label: String, index: Int): View {
-        val selected = tab == index
-        val item = LinearLayout(this)
-        item.orientation = LinearLayout.VERTICAL
-        item.gravity = Gravity.CENTER_HORIZONTAL
-        item.setPadding(0, dp(8), 0, dp(8))
-        if (selected) item.background = pill(lav, 22)
+    /** Inactive items show only an icon; the active one grows into a pill with its label. */
+    private fun addNavItem(bar: LinearLayout, icon: Int, label: String, index: Int) {
+        val sel = tab == index
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.HORIZONTAL
+        box.gravity = Gravity.CENTER
+        box.setPadding(dp(8), dp(11), dp(8), dp(11))
+        val bg = pill(lav, 22)
+        bg.alpha = if (sel) 255 else 0
+        box.background = bg
 
         val img = ImageView(this)
         img.setImageResource(icon)
-        img.setColorFilter(if (selected) accent else mute)
-        item.addView(img, LinearLayout.LayoutParams(dp(24), dp(24)))
-        item.addView(tv(label, 12f, if (selected) accent else mute, selected), lp(-2, -2, top = 2))
+        img.setColorFilter(if (sel) accent else ink)
+        box.addView(img, LinearLayout.LayoutParams(dp(22), dp(22)))
 
-        item.setOnClickListener {
-            if (tab != index) {
-                tab = index
-                render()
+        val lab = tv(label, 13f, accent, true)
+        lab.maxLines = 1
+        lab.alpha = if (sel) 1f else 0f
+        lab.visibility = if (sel) View.VISIBLE else View.GONE
+        val labelParams = LinearLayout.LayoutParams(-2, -2)
+        labelParams.marginStart = dp(6)
+        box.addView(lab, labelParams)
+
+        box.setOnClickListener { selectTab(index) }
+        val p = LinearLayout.LayoutParams(0, -2, if (sel) NAV_SELECTED_WEIGHT else 1f)
+        p.marginEnd = if (index < 2) dp(4) else 0
+        bar.addView(box, p)
+        navItems.add(NavItem(box, bg, img, lab))
+    }
+
+    private fun selectTab(idx: Int) {
+        if (idx == tab) return
+        navAnim?.end()
+        val from = tab
+        tab = idx
+        navItems[idx].label.visibility = View.VISIBLE
+
+        val evaluator = ArgbEvaluator()
+        val anim = ValueAnimator.ofFloat(0f, 1f)
+        anim.duration = 320
+        anim.interpolator = OvershootInterpolator(0.9f)
+        anim.addUpdateListener { a ->
+            val f = a.animatedValue as Float
+            for (i in navItems.indices) {
+                val n = navItems[i]
+                val s = when (i) {
+                    idx -> f
+                    from -> 1f - f
+                    else -> 0f
+                }
+                val c = s.coerceIn(0f, 1f)
+                val lpar = n.box.layoutParams as LinearLayout.LayoutParams
+                lpar.weight = 1f + (NAV_SELECTED_WEIGHT - 1f) * s
+                n.box.layoutParams = lpar
+                n.bg.alpha = (255 * c).toInt()
+                n.label.alpha = c
+                n.icon.setColorFilter(evaluator.evaluate(c, ink, accent) as Int)
             }
         }
-        return item
+        anim.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                for (i in navItems.indices) {
+                    val n = navItems[i]
+                    val on = i == idx
+                    val lpar = n.box.layoutParams as LinearLayout.LayoutParams
+                    lpar.weight = if (on) NAV_SELECTED_WEIGHT else 1f
+                    n.box.layoutParams = lpar
+                    n.bg.alpha = if (on) 255 else 0
+                    n.label.alpha = if (on) 1f else 0f
+                    n.label.visibility = if (on) View.VISIBLE else View.GONE
+                    n.icon.setColorFilter(if (on) accent else ink)
+                }
+            }
+        })
+        navAnim = anim
+        anim.start()
+
+        // Swap the page and let it slide in.
+        fillContent()
+        contentScroll.scrollTo(0, 0)
+        contentRoot.alpha = 0f
+        contentRoot.translationY = dp(14).toFloat()
+        contentRoot.animate().alpha(1f).translationY(0f).setDuration(240)
+            .setInterpolator(DecelerateInterpolator()).start()
+    }
+
+    // ---------------------------------------------------------------- Splash
+
+    /** Shown on every cold start: the logo scales in on white, then fades into the app. */
+    private fun showSplash() {
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.WHITE
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or
+                View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+
+        val frame = FrameLayout(this)
+        frame.setBackgroundColor(Color.WHITE)
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.gravity = Gravity.CENTER
+
+        val logo = ImageView(this)
+        logo.setImageResource(R.drawable.ic_logo)
+        col.addView(logo, LinearLayout.LayoutParams(dp(112), dp(112)))
+        val name = tv("VALight", 22f, Color.parseColor("#0B0B0B"), true)
+        name.letterSpacing = 0.12f
+        col.addView(name, lp(-2, -2, top = 12))
+        frame.addView(col, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        setContentView(frame)
+
+        logo.alpha = 0f
+        logo.scaleX = 0.6f
+        logo.scaleY = 0.6f
+        name.alpha = 0f
+        logo.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(520)
+            .setInterpolator(OvershootInterpolator(1.2f)).start()
+        name.animate().alpha(1f).setStartDelay(250).setDuration(400).start()
+
+        ui.postDelayed({
+            frame.animate().alpha(0f).setDuration(220).withEndAction {
+                render()
+                val content = findViewById<View>(android.R.id.content)
+                content.alpha = 0f
+                content.animate().alpha(1f).setDuration(240).start()
+            }.start()
+        }, 1300)
     }
 
     // ---------------------------------------------------------------- Home
@@ -549,7 +695,7 @@ class MainActivity : Activity() {
         val avatar = FrameLayout(this)
         avatarOuter = View(this)
         val inner = View(this)
-        inner.background = circle(Color.parseColor(if (dark) "#1A1838" else "#F4F2FF"))
+        inner.background = circle(bgTop)
         avatar.addView(avatarOuter, FrameLayout.LayoutParams(dp(84), dp(84)))
         avatar.addView(inner, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.CENTER))
         header.addView(avatar, LinearLayout.LayoutParams(dp(84), dp(84)))
@@ -832,7 +978,7 @@ class MainActivity : Activity() {
             val d = circle(p.second)
             d.setStroke(
                 dp(if (p.second == color) 3 else 1),
-                if (p.second == color) accent else dotBorder
+                if (p.second == color) ink else dotBorder
             )
             p.first.background = d
         }

@@ -53,7 +53,7 @@ class RingService : Service() {
             nm.createNotificationChannel(ch)
         }
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_logo_mono)
             .setContentTitle("VALight")
             .setContentText("RGB ring is on")
             .setOngoing(true)
