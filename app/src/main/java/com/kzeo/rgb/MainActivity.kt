@@ -80,7 +80,6 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- state
 
-    private val NAV_SELECTED_WEIGHT = 2.2f
     private val io = Executors.newSingleThreadExecutor()
     private val ui = Handler(Looper.getMainLooper())
     private val poll = object : Runnable {
@@ -124,13 +123,32 @@ class MainActivity : Activity() {
     private val presets = ArrayList<Pair<View, Int>>()
 
     private var guard = false
+    private var tourActive = false
+    private var tourPage = 0
 
-    private class NavItem(
-        val box: LinearLayout,
-        val bg: GradientDrawable,
-        val icon: ImageView,
-        val label: TextView
-    )
+    private class NavItem(val icon: ImageView, val label: TextView, val labelW: Int)
+
+    /** Rounded highlight that slides between tabs; drawn directly so moving it never triggers a layout. */
+    private inner class PillView(ctx: Context) : View(ctx) {
+        private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        private val rect = android.graphics.RectF()
+        var l = 0f
+        var r = 0f
+
+        fun setColor(c: Int) {
+            paint.color = c
+        }
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            if (r <= l) return
+            rect.set(l, 0f, r, height.toFloat())
+            canvas.drawRoundRect(rect, dp(22).toFloat(), dp(22).toFloat(), paint)
+        }
+    }
+
+    private lateinit var navBarView: FrameLayout
+    private lateinit var navPill: PillView
+    private val navSel = FloatArray(3)
 
     private val navItems = ArrayList<NavItem>()
     private var navAnim: ValueAnimator? = null
@@ -403,7 +421,9 @@ class MainActivity : Activity() {
         }
         window.decorView.systemUiVisibility = flags
 
-        if (Prefs.name(this).isBlank()) buildOnboarding() else buildShell()
+        if (Prefs.name(this).isBlank()) buildOnboarding()
+        else if (tourActive || !Prefs.tourDone(this)) buildTour()
+        else buildShell()
     }
 
     private fun buildOnboarding() {
@@ -458,8 +478,8 @@ class MainActivity : Activity() {
             imm.hideSoftInputFromWindow(et.windowToken, 0)
             Prefs.setName(this, n)
             tab = 0
+            tourPage = 0
             render()
-            askNotifications()
         }
 
         et.setOnEditorActionListener { _, _, _ ->
@@ -495,7 +515,7 @@ class MainActivity : Activity() {
         contentRoot = root
 
         val nav = buildNav()
-        val np = lp(-1, -2, top = 4, bottom = 10)
+        val np = lp(-1, dp(64), top = 4, bottom = 10)
         np.marginStart = dp(16)
         np.marginEnd = dp(16)
         shell.addView(nav, np)
@@ -523,107 +543,258 @@ class MainActivity : Activity() {
 
     private fun buildNav(): View {
         navItems.clear()
-        val bar = LinearLayout(this)
-        bar.orientation = LinearLayout.HORIZONTAL
-        bar.gravity = Gravity.CENTER
+        navHits.clear()
+        for (i in 0..2) navSel[i] = if (i == tab) 1f else 0f
+        val bar = FrameLayout(this)
         val bg = GradientDrawable()
         bg.cornerRadius = dp(30).toFloat()
         bg.setColor(navBar)
         bg.setStroke(dp(1), navStroke)
         bar.background = bg
         bar.elevation = dp(10).toFloat()
-        bar.setPadding(dp(10), dp(10), dp(10), dp(10))
+        navBarView = bar
+
+        val pill = PillView(this)
+        pill.setColor(lav)
+        navPill = pill
+        val pp = FrameLayout.LayoutParams(-1, -1)
+        pp.topMargin = dp(10)
+        pp.bottomMargin = dp(10)
+        bar.addView(pill, pp)
+
         addNavItem(bar, R.drawable.ic_home, t("Home", "Beranda"), 0)
         addNavItem(bar, R.drawable.ic_info, t("Device", "Perangkat"), 1)
         addNavItem(bar, R.drawable.ic_settings, t("Settings", "Pengaturan"), 2)
+
+        bar.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutNav() }
         return bar
     }
 
-    /** Inactive items show only an icon; the active one grows into a pill with its label. */
-    private fun addNavItem(bar: LinearLayout, icon: Int, label: String, index: Int) {
-        val sel = tab == index
-        val box = LinearLayout(this)
-        box.orientation = LinearLayout.HORIZONTAL
-        box.gravity = Gravity.CENTER
-        box.setPadding(dp(8), dp(11), dp(8), dp(11))
-        val bg = pill(lav, 22)
-        bg.alpha = if (sel) 255 else 0
-        box.background = bg
-
+    private fun addNavItem(bar: FrameLayout, icon: Int, label: String, index: Int) {
         val img = ImageView(this)
         img.setImageResource(icon)
-        img.setColorFilter(if (sel) accent else ink)
-        box.addView(img, LinearLayout.LayoutParams(dp(22), dp(22)))
+        val ip = FrameLayout.LayoutParams(dp(22), dp(22), Gravity.START or Gravity.CENTER_VERTICAL)
+        bar.addView(img, ip)
 
         val lab = tv(label, 13f, accent, true)
         lab.maxLines = 1
-        lab.alpha = if (sel) 1f else 0f
-        lab.visibility = if (sel) View.VISIBLE else View.GONE
-        val labelParams = LinearLayout.LayoutParams(-2, -2)
-        labelParams.marginStart = dp(6)
-        box.addView(lab, labelParams)
+        lab.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val lw = lab.measuredWidth
+        bar.addView(lab, FrameLayout.LayoutParams(-2, -2, Gravity.START or Gravity.CENTER_VERTICAL))
 
-        box.setOnClickListener { selectTab(index) }
-        val p = LinearLayout.LayoutParams(0, -2, if (sel) NAV_SELECTED_WEIGHT else 1f)
-        p.marginEnd = if (index < 2) dp(4) else 0
-        bar.addView(box, p)
-        navItems.add(NavItem(box, bg, img, lab))
+        val hit = View(this)
+        hit.setOnClickListener { selectTab(index) }
+        hit.tag = index
+        bar.addView(hit, FrameLayout.LayoutParams(0, -1, Gravity.START))
+        navHits.add(hit)
+        navItems.add(NavItem(img, lab, lw))
+    }
+
+    private val navHits = ArrayList<View>()
+
+    /** Positions every nav element from navSel using translations only: no layout pass per frame. */
+    private fun layoutNav() {
+        if (navItems.size < 3 || navBarView.width == 0) return
+        val side = dp(10).toFloat()
+        val gap = dp(4).toFloat()
+        val unit = navBarView.width - 2 * side - 2 * gap
+        val extra = 1.2f
+        val total = 3f + extra
+        var x = side
+        var pl = 0f
+        var pr = 0f
+        val ev = ArgbEvaluator()
+        val ink0 = ink
+        val acc = accent
+        for (i in 0..2) {
+            val s = navSel[i].coerceIn(0f, 1f)
+            val w = unit * (1f + extra * navSel[i]) / total
+            val n = navItems[i]
+            val groupW = dp(22) + s * (dp(6) + n.labelW)
+            val gx = x + (w - groupW) / 2f
+            n.icon.translationX = gx
+            n.icon.setColorFilter(ev.evaluate(s, ink0, acc) as Int)
+            n.label.translationX = gx + dp(22) + dp(6) * s
+            n.label.alpha = s
+            val h = navHits[i]
+            val third = (navBarView.width / 3f).toInt()
+            if (h.layoutParams.width != third) {
+                h.layoutParams.width = third
+                h.requestLayout()
+            }
+            h.translationX = third * i.toFloat()
+            pl += s * x
+            pr += s * (x + w)
+            x += w + gap
+        }
+        navPill.l = pl
+        navPill.r = pr
+        navPill.invalidate()
     }
 
     private fun selectTab(idx: Int) {
         if (idx == tab) return
-        navAnim?.end()
-        val from = tab
+        navAnim?.cancel()
         tab = idx
-        navItems[idx].label.visibility = View.VISIBLE
 
-        val evaluator = ArgbEvaluator()
+        val start = navSel.copyOf()
         val anim = ValueAnimator.ofFloat(0f, 1f)
-        anim.duration = 320
-        anim.interpolator = OvershootInterpolator(0.9f)
+        anim.duration = 300
+        anim.interpolator = android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)
         anim.addUpdateListener { a ->
             val f = a.animatedValue as Float
-            for (i in navItems.indices) {
-                val n = navItems[i]
-                val s = when (i) {
-                    idx -> f
-                    from -> 1f - f
-                    else -> 0f
-                }
-                val c = s.coerceIn(0f, 1f)
-                val lpar = n.box.layoutParams as LinearLayout.LayoutParams
-                lpar.weight = 1f + (NAV_SELECTED_WEIGHT - 1f) * s
-                n.box.layoutParams = lpar
-                n.bg.alpha = (255 * c).toInt()
-                n.label.alpha = c
-                n.icon.setColorFilter(evaluator.evaluate(c, ink, accent) as Int)
+            for (i in 0..2) {
+                val target = if (i == idx) 1f else 0f
+                navSel[i] = start[i] + (target - start[i]) * f
             }
+            layoutNav()
         }
-        anim.addListener(object : AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: Animator) {
-                for (i in navItems.indices) {
-                    val n = navItems[i]
-                    val on = i == idx
-                    val lpar = n.box.layoutParams as LinearLayout.LayoutParams
-                    lpar.weight = if (on) NAV_SELECTED_WEIGHT else 1f
-                    n.box.layoutParams = lpar
-                    n.bg.alpha = if (on) 255 else 0
-                    n.label.alpha = if (on) 1f else 0f
-                    n.label.visibility = if (on) View.VISIBLE else View.GONE
-                    n.icon.setColorFilter(if (on) accent else ink)
-                }
-            }
-        })
         navAnim = anim
-        anim.start()
 
-        // Swap the page and let it slide in.
+        // Build the new page first (while hidden) so the heavy work lands before the animation clock starts.
+        contentRoot.animate().cancel()
+        contentRoot.alpha = 0f
         fillContent()
         contentScroll.scrollTo(0, 0)
-        contentRoot.alpha = 0f
-        contentRoot.translationY = dp(14).toFloat()
-        contentRoot.animate().alpha(1f).translationY(0f).setDuration(240)
+        contentRoot.translationY = dp(10).toFloat()
+        contentRoot.post {
+            if (navAnim === anim) anim.start()
+            contentRoot.animate().alpha(1f).translationY(0f).setDuration(220)
+                .setInterpolator(DecelerateInterpolator()).start()
+        }
+    }
+
+    // ---------------------------------------------------------------- Guide tour
+
+    private class TourPage(val icon: Int, val en: String, val id: String, val bodyEn: String, val bodyId: String)
+
+    private val tourPages = listOf(
+        TourPage(R.drawable.ic_logo_mono, "Welcome to VALight", "Selamat datang di VALight",
+            "Control the RGB ring on the back of your POCO X8 Pro: turn it on or off and pick any color.",
+            "Atur ring RGB di belakang POCO X8 Pro: nyalakan atau matikan dan pilih warna sesukamu."),
+        TourPage(R.drawable.ic_bolt, "Shizuku is required", "Butuh Shizuku",
+            "VALight talks to the ring through Shizuku. Install Shizuku, start it, then tap \"Grant Shizuku permission\" on the Home tab.",
+            "VALight mengontrol ring lewat Shizuku. Pasang Shizuku, jalankan, lalu ketuk \"Beri izin Shizuku\" di tab Beranda."),
+        TourPage(R.drawable.ic_power, "Ring on / off", "Ring nyala / mati",
+            "Use the big power button on the card, or the RGB ring switch under Controls.",
+            "Pakai tombol power besar di kartu, atau saklar RGB ring di bagian Kontrol."),
+        TourPage(R.drawable.ic_palette, "Pick your color", "Pilih warnamu",
+            "Drag the R, G and B sliders or tap a preset. The ring updates instantly.",
+            "Geser slider R, G, B atau ketuk warna preset. Ring langsung berubah."),
+        TourPage(R.drawable.ic_sync, "RGB always on", "RGB selalu nyala",
+            "Keeps the ring lit in the background and after a reboot. Also turn off battery optimization so the system doesn't stop it.",
+            "Menjaga ring tetap nyala di latar belakang dan setelah restart. Matikan juga optimasi baterai agar tidak dihentikan sistem."),
+        TourPage(R.drawable.ic_info, "Device info", "Info perangkat",
+            "The middle tab shows your device, ring support, HyperOS light and Shizuku status.",
+            "Tab tengah menampilkan perangkat, dukungan ring, lampu HyperOS, dan status Shizuku."),
+        TourPage(R.drawable.ic_settings, "Make it yours", "Sesuaikan",
+            "In Settings change your name, language and theme. You can replay this guide there anytime.",
+            "Di Pengaturan ubah nama, bahasa, dan tema. Kamu bisa memutar ulang panduan ini kapan saja.")
+    )
+
+    private fun finishTour() {
+        val first = !Prefs.tourDone(this)
+        Prefs.setTourDone(this, true)
+        tourActive = false
+        render()
+        if (first) askNotifications()
+    }
+
+    private fun buildTour() {
+        val pg = tourPages[tourPage]
+        val last = tourPage == tourPages.size - 1
+
+        val frame = FrameLayout(this)
+        frame.background = background()
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.gravity = Gravity.CENTER_HORIZONTAL
+        frame.addView(col, FrameLayout.LayoutParams(-1, -1))
+        frame.setOnApplyWindowInsetsListener { _, ins ->
+            col.setPadding(dp(28), ins.systemWindowInsetTop + dp(16), dp(28), ins.systemWindowInsetBottom + dp(24))
+            ins
+        }
+
+        val skip = tv(t("Skip", "Lewati"), 15f, mute, true)
+        skip.setPadding(dp(12), dp(10), dp(12), dp(10))
+        skip.visibility = if (last) View.INVISIBLE else View.VISIBLE
+        skip.setOnClickListener { finishTour() }
+        val sp = lp(-2, -2)
+        sp.gravity = Gravity.END
+        col.addView(skip, sp)
+
+        val mid = LinearLayout(this)
+        mid.orientation = LinearLayout.VERTICAL
+        mid.gravity = Gravity.CENTER
+        col.addView(mid, lp(-1, 0, weight = 1f))
+
+        val badge = ImageView(this)
+        badge.setImageResource(pg.icon)
+        badge.background = circle(accent)
+        badge.setPadding(dp(8), dp(8), dp(8), dp(8))
+        badge.setColorFilter(Color.WHITE)
+        mid.addView(badge, LinearLayout.LayoutParams(dp(96), dp(96)))
+
+        val title = tv(t(pg.en, pg.id), 26f, ink, true)
+        title.gravity = Gravity.CENTER
+        mid.addView(title, lp(-2, -2, top = 32))
+        val body = tv(t(pg.bodyEn, pg.bodyId), 16f, mute)
+        body.gravity = Gravity.CENTER
+        body.setLineSpacing(0f, 1.15f)
+        mid.addView(body, lp(-2, -2, top = 14))
+
+        mid.alpha = 0f
+        mid.translationX = dp(24).toFloat()
+        mid.animate().alpha(1f).translationX(0f).setDuration(260)
             .setInterpolator(DecelerateInterpolator()).start()
+
+        val dots = LinearLayout(this)
+        dots.gravity = Gravity.CENTER
+        for (i in tourPages.indices) {
+            val d = View(this)
+            val on = i == tourPage
+            d.background = pill(if (on) accent else dotBorder, 4)
+            dots.addView(d, lp(dp(if (on) 22 else 8), dp(8)).also {
+                it.marginStart = dp(3)
+                it.marginEnd = dp(3)
+            })
+        }
+        col.addView(dots, lp(-2, -2, bottom = 22))
+
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        if (tourPage > 0) {
+            val back = Button(this)
+            back.text = t("Back", "Kembali")
+            back.isAllCaps = false
+            back.textSize = 16f
+            back.setTextColor(ink)
+            back.background = pill(blueBg, 22)
+            back.setOnClickListener {
+                tourPage--
+                render()
+            }
+            row.addView(back, lp(0, dp(54), weight = 1f).also { it.marginEnd = dp(10) })
+        }
+        val next = Button(this)
+        next.text = if (last) t("Get started", "Mulai") else t("Next", "Lanjut")
+        next.isAllCaps = false
+        next.textSize = 16f
+        next.setTextColor(Color.WHITE)
+        next.background = pill(accent, 22)
+        next.setOnClickListener {
+            if (last) finishTour() else {
+                tourPage++
+                render()
+            }
+        }
+        row.addView(next, lp(0, dp(54), weight = 1f))
+        col.addView(row, lp(-1, -2))
+
+        setContentView(frame)
     }
 
     // ---------------------------------------------------------------- Splash
@@ -905,6 +1076,17 @@ class MainActivity : Activity() {
                 themeControl
             )
         )
+
+        section(root, t("Help", "Bantuan"))
+        val guideRow = controlRow(
+            R.drawable.ic_info, t("Guide tour", "Panduan aplikasi"), tv("", 12f, mute), chevron()
+        )
+        guideRow.setOnClickListener {
+            tourActive = true
+            tourPage = 0
+            render()
+        }
+        root.addView(guideRow)
 
         val ver = tv(versionName(), 12f, mute)
         ver.gravity = Gravity.CENTER

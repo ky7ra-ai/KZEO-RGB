@@ -20,6 +20,9 @@ object Prefs {
     fun name(c: Context): String = sp(c).getString("name", "") ?: ""
     fun setName(c: Context, v: String) = sp(c).edit().putString("name", v).apply()
 
+    fun tourDone(c: Context): Boolean = sp(c).getBoolean("tour_done", false)
+    fun setTourDone(c: Context, v: Boolean) = sp(c).edit().putBoolean("tour_done", v).apply()
+
     /** "id" or "en". Defaults to the phone's language. */
     fun lang(c: Context): String {
         val saved = sp(c).getString("lang", null)
